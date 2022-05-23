@@ -1,6 +1,6 @@
 # encoding: utf-8
 #
-# Copyright 2014-2021 Greg Neagle.
+# Copyright 2014-2022 Greg Neagle.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -250,7 +250,7 @@ def make_client_keychain(cert_info=None):
     if os.path.exists(abs_keychain_path):
         os.unlink(abs_keychain_path)
     if not os.path.exists(os.path.dirname(abs_keychain_path)):
-        os.makedirs(os.path.dirname(abs_keychain_path))
+        os.makedirs(os.path.dirname(abs_keychain_path), 0o700)
     # create a new keychain
     display.display_debug1('Creating client keychain...')
     try:

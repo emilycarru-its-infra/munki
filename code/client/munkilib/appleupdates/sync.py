@@ -1,6 +1,6 @@
 # encoding: utf-8
 #
-# Copyright 2009-2021 Greg Neagle.
+# Copyright 2009-2022 Greg Neagle.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -95,8 +95,12 @@ DEFAULT_CATALOG_URLS = {
               'index-10.16-10.15-10.14-10.13-10.12-10.11-10.10-10.9-'
               'mountainlion-lion-snowleopard-leopard.merged-1.sucatalog'),
     '11': ('https://swscan.apple.com/content/catalogs/others/'
-           'index-11-10.15-10.14-10.13-10.12-10.11-10.10-10.9-'
+           'index-10.16-10.15-10.14-10.13-10.12-10.11-10.10-10.9-'
            'mountainlion-lion-snowleopard-leopard.merged-1.sucatalog'),
+    '12': ('https://swscan.apple.com/content/catalogs/others/'
+           'index-12-10.16-10.15-10.14-10.13-10.12-10.11-10.10-10.9-'
+           'mountainlion-lion-snowleopard-leopard.merged-1.sucatalog'),
+    
 }
 
 # Preference domain for Apple Software Update.
@@ -417,8 +421,6 @@ class AppleUpdateSync(object):
         for product_key in product_ids:
             if processes.stop_requested():
                 return
-            display.display_status_minor(
-                'Caching metadata for product ID %s', product_key)
             if product_key not in catalog['Products']:
                 if product_key.startswith("MSU_UPDATE_"):
                     # BigSur+ updates don't have metadata in the sucatalog
@@ -430,6 +432,8 @@ class AppleUpdateSync(object):
                         'Could not cache metadata for product ID %s'
                         % product_key)
                 continue
+            display.display_status_minor(
+                'Caching metadata for product ID %s', product_key)
             product = catalog['Products'][product_key]
             if 'ServerMetadataURL' in product:
                 self.retrieve_url_to_cache_dir(

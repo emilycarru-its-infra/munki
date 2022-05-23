@@ -3,7 +3,7 @@
 //  Managed Software Center
 //
 //  Created by Greg Neagle on 7/15/18.
-//  Copyright © 2018-2021 The Munki Project. All rights reserved.
+//  Copyright © 2018-2022 The Munki Project. All rights reserved.
 //
 
 import Cocoa
@@ -15,10 +15,11 @@ class MSCAlertController: NSObject {
     var window: NSWindow? // our parent window
     var timers: [Timer] = []
     var quitButton: NSButton?
+    var haveOpenedSysPrefsSUPane = false
     
     func handlePossibleAuthRestart() {
         // Ask for and store a password for auth restart if needed/possible
-        if updatesRequireRestart() && verifyUser(NSUserName()) && !verifyRecoveryKeyPresent() {
+        if !haveOpenedSysPrefsSUPane && updatesRequireRestart() && verifyUser(NSUserName()) && !verifyRecoveryKeyPresent() {
             // FV is on and user is in list of FV users, so they can
             // authrestart, and we do not have a stored FV recovery
             // key/password. So we should prompt the user for a password
@@ -137,7 +138,7 @@ class MSCAlertController: NSObject {
             // tell user they cannot install the updates
             msc_log("user", "apple_updates_user_cannot_install")
             alert.informativeText = NSLocalizedString(
-                "There are one or more pending Apple Software Updates that require a restart.\n\nYour administrator has restricted installation of these updates. Contact your administrator for assistance.",
+                "Your administrator has restricted installation of these updates. Contact your administrator for assistance.",
                 comment: "Apple Software Updates Unable detail")
             // disable insstall now button
             alert.buttons[0].isEnabled = false
@@ -145,7 +146,7 @@ class MSCAlertController: NSObject {
             // prompt user to install using System Preferences
             msc_log("user", "apple_updates_pending")
             alert.informativeText = NSLocalizedString(
-                "There are one or more pending Apple Software Updates that require a restart.\n\nYou must install these updates using Software Update in System Preferences.",
+                "You must install these updates using Software Update in System Preferences.",
                 comment: "Apple Software Updates Pending detail")
             if shouldAggressivelyNotifyAboutAppleUpdates() {
                 // disable the skip button
@@ -181,14 +182,14 @@ class MSCAlertController: NSObject {
                                               userInfo: nil,
                                               repeats: false)
             timers.append(timer2)
-            let timer3 = Timer.scheduledTimer(timeInterval: 9.5,
+            let timer3 = Timer.scheduledTimer(timeInterval: 14.5,
                                               target: self,
                                               selector: #selector(self.fadeOutBackdropWindows),
                                               userInfo: nil,
                                               repeats: false)
             timers.append(timer3)
-            // wait 10 seconds, then quit
-            let timer4 = Timer.scheduledTimer(timeInterval: 10.0,
+            // wait 15 seconds, then quit
+            let timer4 = Timer.scheduledTimer(timeInterval: 15.0,
                                               target: NSApp as Any,
                                               selector: #selector(NSApp.terminate),
                                               userInfo: self,
@@ -212,6 +213,7 @@ class MSCAlertController: NSObject {
     @objc func openSoftwareUpdate() {
         // object method to call openSoftwareUpdatePrefsPane function
         openSoftwareUpdatePrefsPane()
+        self.haveOpenedSysPrefsSUPane = true
     }
     
     @objc func closeMainWindow() {

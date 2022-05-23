@@ -3,7 +3,7 @@
 //  Managed Software Center
 //
 //  Created by Greg Neagle on 6/15/18.
-//  Copyright © 2018-2021 The Munki Project. All rights reserved.
+//  Copyright © 2018-2022 The Munki Project. All rights reserved.
 //
 
 import Cocoa
@@ -17,13 +17,19 @@ extension Array {
     }
 }
 
+
 func interfaceTheme() -> String {
     // Returns "dark" if using Dark Mode, otherwise "light"
-    if #available(OSX 10.10, *) {
+    if #available(OSX 10.15, *) {
+        let appearanceDescription = NSApplication.shared.effectiveAppearance.debugDescription.lowercased()
+        if appearanceDescription.contains("dark") {
+            return "dark"
+        }
+    } else if #available(OSX 10.10, *) {
         let os_vers = OperatingSystemVersion(majorVersion: 10, minorVersion: 14, patchVersion: 0)
         if ProcessInfo().isOperatingSystemAtLeast(os_vers) || UserDefaults.standard.bool(forKey: "AllowDarkModeOnUnsupportedOSes") {
-            if let interfaceType = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") {
-                if interfaceType == "Dark" {
+            if let appleInterfaceStyle = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") {
+                if appleInterfaceStyle.lowercased().contains("dark") {
                     return "dark"
                 }
             }
@@ -31,6 +37,7 @@ func interfaceTheme() -> String {
     }
     return "light"
 }
+
 
 func getRawTemplate(_ template_name: String) -> String {
     // return a raw html template.
@@ -630,6 +637,10 @@ func buildUpdatesPage() throws {
         try buildUpdateStatusPage()
         return
     }
+    var show_additional_updates = true
+    if (NSApp.delegate! as! AppDelegate).mainWindowController.weShouldBeObnoxious() {
+        show_additional_updates = false
+    }
     let filterAppleUpdates = (NSApp.delegate! as! AppDelegate).mainWindowController.should_filter_apple_updates
     let item_list = getEffectiveUpdateList(filterAppleUpdates)
     for item in item_list {
@@ -638,32 +649,38 @@ func buildUpdatesPage() throws {
             item["note"] = ""
         }
     }
+    let update_names = item_list.map({$0["name"] as? String ?? ""})
     let problem_updates = getProblemItems()
     for item in problem_updates {
         item["added_class"] = ""
         item["hide_cancel_button"] = "hidden"
     }
-    // find any optional installs with update available
-    var other_updates = getOptionalInstallItems().filter(
-        { ($0["status"] as? String ?? "") == "update-available" }
-    )
-    // find any listed optional install updates that require a higher OS
-    // or have insufficient disk space or other blockers (because they have a
-    // note)
-    let blocked_optional_updates = getOptionalInstallItems().filter(
-        {
-            (($0["status"] as? String ?? "") == "installed" &&
-             !(($0["note"] as? String ?? "").isEmpty))
+    var other_updates = [OptionalItem]()
+    if show_additional_updates {
+        // find any optional installs with update available
+        // that aren't already in our list of updates
+        other_updates = getOptionalInstallItems().filter(
+            { ($0["status"] as? String ?? "") == "update-available" &&
+                !update_names.contains($0["name"] as? String ?? "")
+            }
+        )
+        // find any listed optional install updates that require a higher OS
+        // or have insufficient disk space or other blockers (because they have a
+        // note)
+        let blocked_optional_updates = getOptionalInstallItems().filter(
+            {
+                (($0["status"] as? String ?? "") == "installed" &&
+                 !(($0["note"] as? String ?? "").isEmpty))
+            }
+        )
+        for item in blocked_optional_updates {
+            item["hide_cancel_button"] = "hidden"
         }
-    )
-    for item in blocked_optional_updates {
-        item["hide_cancel_button"] = "hidden"
+        other_updates += blocked_optional_updates
+        for item in other_updates {
+            item["added_class"] = ""
+        }
     }
-    other_updates += blocked_optional_updates
-    for item in other_updates {
-        item["added_class"] = ""
-    }
-    
     let page = GenericItem()
     page["update_rows"] = ""
     page["hide_progress_spinner"] = "hidden"

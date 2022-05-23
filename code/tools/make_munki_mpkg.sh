@@ -23,6 +23,7 @@ CONFPKG=NO
 MDMSTYLE=NO
 ORGNAME=macOS
 ROSETTA2=NO
+CLIENTCERTPKG=NO
 
 # try to automagically find Munki source root
 TOOLSDIR=$(dirname "$0")
@@ -48,10 +49,8 @@ Usage: $(basename "$0") [-i id] [-r root] [-o dir] [-c package] [-s cert]
     -n orgname  Specify the name of the organization
     -p          Build Python.framework even if one exists
     -B          Include a package that sets Munki's bootstrap mode
-    -m          Build the package in a manner suitable for install via MDM;
-                specifically, attempt to start all the launchd agents and
-                daemons without requiring a restart. Such a package is not
-                suited for upgrade installs or install via Munki itself.
+    -A          Auto run managedsoftwareupdate immediately after install. This
+                really should be used only with DEP/ADM enrollments.
     -c plist    Build a configuration package using the preferences defined in a
                 plist file.
     -R          Include a pkg to install Rosetta2 on ARM-based hardware.
@@ -61,12 +60,14 @@ Usage: $(basename "$0") [-i id] [-r root] [-o dir] [-c package] [-s cert]
     -S cert_cn  Sign apps with a Developer ID Application certificate from
                 keychain. Provide the certificate's Common Name.
                 Ex: "Developer ID Application: Munki (U8PN57A5N2)"
+    -T pemfile  Include a pkg to install a client certificate for server mTLS
+                mutual authentication, at /Library/Managed Installs/certs/.
 
 EOF
 }
 
 
-while getopts "i:r:o:n:c:s:S:pBmhR" option
+while getopts "i:r:o:n:c:s:S:T:pBAhR" option
 do
     case $option in
         "i")
@@ -97,11 +98,15 @@ do
         "B")
             BOOTSTRAPPKG=YES
             ;;
-        "m")
-            MDMSTYLE=YES
+        "A")
+            AUTORUNPKG=YES
             ;;
         "R") 
             ROSETTA2=YES
+            ;;
+        "T")
+            CLIENTCERT="$OPTARG"
+            CLIENTCERTPKG=YES
             ;;
         "h" | *)
             usage
@@ -154,6 +159,13 @@ if [[ "$CONFPKG" == "YES" ]] ; then
     CONFFULLPATH="${CONFDIRPATH}/${CONFPLISTNAME}"
     if ! defaults read "$CONFFULLPATH" 1>/dev/null ; then
         echo "Could not read $CONFFULLPATH, or invalid plist!"
+        exit 1
+    fi
+fi
+if [[ "$CLIENTCERTPKG" == "YES" ]] ; then
+    CLIENTCERTPEMCHECK="$(sudo /usr/bin/file "$CLIENTCERT" 2>/dev/null)"
+    if [[ ! $CLIENTCERTPEMCHECK =~ "PEM certificate" ]] ; then
+        echo "Could not read $CLIENTCERT, or invalid PEM file!"
         exit 1
     fi
 fi
@@ -266,13 +278,18 @@ echo "  Bundle ID: $PKGID"
 echo "  Munki source root: $MUNKIROOT"
 echo "  Output directory: $OUTPUTDIR"
 echo "  Include bootstrap pkg: $BOOTSTRAPPKG"
+echo "  Include autorun pkg: $AUTORUNPKG"
 echo "  Include Rosetta2: $ROSETTA2"
 if [ "$CONFPKG" == "YES" ] ; then
     echo "  Include config pkg built with plist: $CONFFULLPATH"
 else
     echo "  Include config pkg: NO"
 fi
-echo "  MDM-style package: $MDMSTYLE"
+if [ "$CLIENTCERTPKG" == "YES" ] ; then
+    echo "  Include client cert pkg built with PEM file: $CLIENTCERT"
+else
+    echo "  Include client cert pkg: NO"
+fi
 echo
 if [ "$APPSIGNINGCERT" != "" ] ; then
     echo "  Sign app with keychain cert: $APPSIGNINGCERT"
@@ -392,8 +409,10 @@ echo "Creating core package template..."
 # Create directory structure.
 COREROOT="$PKGTMP/munki_core"
 mkdir -m 1775 "$COREROOT"
-mkdir -p "$COREROOT/usr/local/munki/munkilib"
-chmod -R 755 "$COREROOT/usr"
+mkdir -m 755 "$COREROOT/usr"
+mkdir -m 755 "$COREROOT/usr/local"
+mkdir -m 755 "$COREROOT/usr/local/munki"
+mkdir -m 755 "$COREROOT/usr/local/munki/munkilib"
 # Copy command line utilities.
 # edit this if list of tools changes!
 for TOOL in authrestartd launchapp logouthelper managedsoftwareupdate supervisor precache_agent ptyexec removepackages
@@ -421,17 +440,18 @@ chmod -R go-w "$COREROOT/usr/local/munki"
 chmod +x "$COREROOT/usr/local/munki"
 
 # make paths.d file
-mkdir -p "$COREROOT/private/etc/paths.d"
+mkdir -m 755 "$COREROOT/private"
+mkdir -m 755 "$COREROOT/private/etc/"
+mkdir -m 755 "$COREROOT/private/etc/paths.d"
 echo "/usr/local/munki" > "$COREROOT/private/etc/paths.d/munki"
-chmod -R 755 "$COREROOT/private"
 chmod 644 "$COREROOT/private/etc/paths.d/munki"
 
 # Create directory structure for /Library/Managed Installs.
 mkdir -m 1775 "$COREROOT/Library"
-mkdir -m 755 -p "$COREROOT/Library/Managed Installs"
-mkdir -m 750 -p "$COREROOT/Library/Managed Installs/Cache"
-mkdir -m 750 -p "$COREROOT/Library/Managed Installs/catalogs"
-mkdir -m 755 -p "$COREROOT/Library/Managed Installs/manifests"
+mkdir -m 755 "$COREROOT/Library/Managed Installs"
+mkdir -m 750 "$COREROOT/Library/Managed Installs/Cache"
+mkdir -m 750 "$COREROOT/Library/Managed Installs/catalogs"
+mkdir -m 755 "$COREROOT/Library/Managed Installs/manifests"
 
 # copy in core cleanup scripts
 if [ -d "$MUNKIROOT/code/tools/pkgresources/core_cleanup_scripts/" ] ; then
@@ -452,8 +472,9 @@ echo "Creating admin package source..."
 # Create directory structure.
 ADMINROOT="$PKGTMP/munki_admin"
 mkdir -m 1775 "$ADMINROOT"
-mkdir -p "$ADMINROOT/usr/local/munki"
-chmod -R 755 "$ADMINROOT/usr"
+mkdir -m 755 "$ADMINROOT/usr"
+mkdir -m 755 "$ADMINROOT/usr/local"
+mkdir -m 755 "$ADMINROOT/usr/local/munki"
 # Copy command line admin utilities.
 # edit this if list of tools changes!
 for TOOL in makecatalogs makepkginfo manifestutil munkiimport iconimporter repoclean
@@ -465,9 +486,10 @@ chmod -R go-w "$ADMINROOT/usr/local/munki"
 chmod +x "$ADMINROOT/usr/local/munki"
 
 # make paths.d file
-mkdir -p "$ADMINROOT/private/etc/paths.d"
+mkdir -m 755 "$ADMINROOT/private"
+mkdir -m 755 "$ADMINROOT/private/etc"
+mkdir -m 755 "$ADMINROOT/private/etc/paths.d"
 echo "/usr/local/munki" > "$ADMINROOT/private/etc/paths.d/munki"
-chmod -R 755 "$ADMINROOT/private"
 chmod 644 "$ADMINROOT/private/etc/paths.d/munki"
 
 # copy in admin cleanup scripts
@@ -539,18 +561,14 @@ cp -X "$MUNKIROOT/launchd/LaunchAgents/"*.plist "$LAUNCHDROOT/Library/LaunchAgen
 chmod 644 "$LAUNCHDROOT/Library/LaunchAgents/"*
 cp -X "$MUNKIROOT/launchd/LaunchDaemons/"*.plist "$LAUNCHDROOT/Library/LaunchDaemons/"
 chmod 644 "$LAUNCHDROOT/Library/LaunchDaemons/"*
-# Create package info file.
-RESTARTFLAG=restart
-if [ "$MDMSTYLE" == "YES" ] ; then
-    RESTARTFLAG=norestart
-fi
 
 # copy in launchd cleanup scripts
 if [ -d "$MUNKIROOT/code/tools/pkgresources/launchd_cleanup_scripts/" ] ; then
     rsync -a --exclude '*.pyc' --exclude '.DS_Store' "$MUNKIROOT/code/tools/pkgresources/launchd_cleanup_scripts/" "$LAUNCHDROOT/usr/local/munki/cleanup/"
 fi
 
-makeinfo launchd "$PKGTMP/info" "$RESTARTFLAG"
+# Create package info file.
+makeinfo launchd "$PKGTMP/info" restart
 
 
 #######################
@@ -565,8 +583,9 @@ mkdir -m 1775 "$APPUSAGEROOT"
 mkdir -m 1775 "$APPUSAGEROOT/Library"
 mkdir -m 755 "$APPUSAGEROOT/Library/LaunchAgents"
 mkdir -m 755 "$APPUSAGEROOT/Library/LaunchDaemons"
-mkdir -p "$APPUSAGEROOT/usr/local/munki"
-chmod -R 755 "$APPUSAGEROOT/usr"
+mkdir -m 755 "$APPUSAGEROOT/usr"
+mkdir -m 755 "$APPUSAGEROOT/usr/local"
+mkdir -m 755 "$APPUSAGEROOT/usr/local/munki"
 # Copy launch agent, launch daemon, daemon, and agent
 # LaunchAgent
 cp -X "$MUNKIROOT/launchd/app_usage_LaunchAgent/"*.plist "$APPUSAGEROOT/Library/LaunchAgents/"
@@ -602,8 +621,9 @@ echo "Creating python package source..."
 # Create directory structure.
 PYTHONROOT="$PKGTMP/munki_python"
 mkdir -m 1775 "$PYTHONROOT"
-mkdir -p "$PYTHONROOT/usr/local/munki"
-chmod -R 755 "$PYTHONROOT/usr"
+mkdir -m 755 "$PYTHONROOT/usr"
+mkdir -m 755 "$PYTHONROOT/usr/local"
+mkdir -m 755 "$PYTHONROOT/usr/local/munki"
 # Copy framework
 cp -R "$MUNKIROOT/Python.framework" "$PYTHONROOT/usr/local/munki/"
 # Create symlink
@@ -646,12 +666,33 @@ if [ "$BOOTSTRAPPKG" == "YES" ] ;  then
 fi
 
 
+#############
+## autorun ##
+#############
+if [ "$AUTORUNPKG" == "YES" ] ; then
+    echo "Creating autorun package source..."
+
+    # Create directory structure.
+    AUTORUNROOT="$PKGTMP/munki_autorun"
+    mkdir -m 1775 "$AUTORUNROOT"
+
+    # copy in autorun cleanup scripts
+    if [ -d "$MUNKIROOT/code/tools/pkgresources/autorun_cleanup_scripts/" ] ; then
+        rsync -a --exclude '*.pyc' --exclude '.DS_Store' "$MUNKIROOT/code/tools/pkgresources/bootstrap_cleanup_scripts/" "$BOOTSTRAPROOT/usr/local/munki/cleanup/"
+    fi
+
+    # Create package info file.
+    makeinfo autorun "$PKGTMP/info" norestart
+    
+fi
+
+
 ############
 ## config ##
 ############
 if [ "$CONFPKG" == "YES" ] ; then
 
-    echo "Creating configuration package souce..."
+    echo "Creating configuration package source..."
 
     # Create directory structure.
     CONFROOT="$PKGTMP/munki_config"
@@ -669,6 +710,7 @@ if [ "$CONFPKG" == "YES" ] ; then
     makeinfo config "$PKGTMP/info" norestart
 fi
 
+
 ###############
 ## Rosetta 2 ##
 ###############
@@ -679,10 +721,29 @@ if [ "$ROSETTA2" == "YES" ] ;  then
     # Create directory structure.
     ROSETTA2ROOT="$PKGTMP/munki_rosetta2"
     mkdir -m 1775 "$ROSETTA2ROOT"
-    mkdir -p "$ROSETTA2ROOT"
 
     # Create package info file.
     makeinfo rosetta2 "$PKGTMP/info" norestart
+fi
+
+
+#################
+## client cert ##
+#################
+if [ "$CLIENTCERTPKG" == "YES" ] ; then
+
+    echo "Creating client cert package souce..."
+
+    # Create directory structure
+    CLIENTCERTROOT="$PKGTMP/munki_clientcert"
+    mkdir -m 1755 "$CLIENTCERTROOT"
+    mkdir -m 755 -p "$CLIENTCERTROOT/Library/Managed Installs"
+    mkdir -m 700 "$CLIENTCERTROOT/Library/Managed Installs/certs"
+    # Copy cert file
+    sudo cp -p "$CLIENTCERT" "$CLIENTCERTROOT/Library/Managed Installs/certs/client.pem"
+
+    # Create package info file
+    makeinfo clientcert "$PKGTMP/info" norestart
 fi
 
 #############################
@@ -715,15 +776,14 @@ PYTHONTITLE="Munki embedded Python"
 PYTHONDESC="Embedded Python 3 framework for Munki."
 BOOTSTRAPTITLE="Munki bootstrap setup"
 BOOTSTRAPDESC="Enables bootstrap mode for the Munki tools."
+AUTORUNTITLE="Munki auto run setup"
+AUTORUNDESC="Triggers an managedsoftwareupdate --auto run immediately after install."
 CONFTITLE="Munki tools configuration"
 CONFDESC="Sets initial preferences for Munki tools."
 ROSETTA2TITLE="Install Rosetta2"
 ROSETTA2DESC="Installs Rosetta2 for ARM-based hardware."
-
-LAUNCHDPOSTINSTALLACTION="onConclusion=\"RequireRestart\""
-if [ "$MDMSTYLE" == "YES" ] ;  then
-    LAUNCHDPOSTINSTALLACTION=""
-fi
+CLIENTCERTTITLE="Munki client certificate"
+CLIENTCERTDESC="Required client certificate for Munki."
 
 BOOTSTRAPOUTLINE=""
 BOOTSTRAPCHOICE=""
@@ -734,6 +794,17 @@ if [ "$BOOTSTRAPPKG" == "YES" ] ; then
         <pkg-ref id=\"$PKGID.bootstrap\"/>
     </choice>"
     BOOTSTRAPREF="<pkg-ref id=\"$PKGID.bootstrap\" auth=\"Root\">${PKGPREFIX}munkitools_bootstrap.pkg</pkg-ref>"
+fi
+
+AUTORUNOUTLINE=""
+AUTORUNCHOICE=""
+AUTORUNREF=""
+if [ "$AUTORUNPKG" == "YES" ] ; then
+    AUTORUNOUTLINE="<line choice=\"autorun\"/>"
+    AUTORUNCHOICE="<choice id=\"autorun\" title=\"$AUTORUNTITLE\" description=\"$AUTORUNDESC\">
+        <pkg-ref id=\"$PKGID.autorun\"/>
+    </choice>"
+    AUTORUNREF="<pkg-ref id=\"$PKGID.autorun\" auth=\"Root\">${PKGPREFIX}munkitools_autorun.pkg</pkg-ref>"
 fi
 
 CONFOUTLINE=""
@@ -760,6 +831,17 @@ if [ "$ROSETTA2" == "YES" ]; then
     HOSTARCHITECTURES="hostArchitectures=\"x86_64,arm64\""
 fi
 
+CLIENTCERTOUTLINE=""
+CLIENTCERTCHOICE=""
+CLIENTCERTREF=""
+if [ "$CLIENTCERTPKG" == "YES" ]; then
+    CLIENTCERTOUTLINE="<line choice=\"clientcert\"/>"
+    CLIENTCERTCHOICE="<choice id=\"clientcert\" title=\"$CLIENTCERTTITLE\" description=\"$CLIENTCERTDESC\">
+        <pkg-ref id=\"$PKGID.clientcert\"/>
+    </choice>"
+    CLIENTCERTREF="<pkg-ref id=\"$PKGID.clientcert\" auth=\"Root\">${PKGPREFIX}munkitools_clientcert.pkg</pkg-ref>"
+fi
+
 cat > "$DISTFILE" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-script minSpecVersion="1.000000">
@@ -769,7 +851,19 @@ cat > "$DISTFILE" <<EOF
             <os-version min="10.11"/>
         </allowed-os-versions>
     </volume-check>
-    <options $HOSTARCHITECTURES customize="allow" allow-external-scripts="no"/>
+    <script>
+    <![CDATA[
+    function launchdRestartAction() {
+      var launchd_choice = choices.launchd.packageUpgradeAction
+      if (launchd_choice == "upgrade" || launchd_choice == "downgrade") {
+          return "RequireRestart";
+      } else {
+          return "None";
+      }
+    }
+    ]]>
+    </script>
+    <options hostArchitectures="x86_64,arm64" customize="allow" allow-external-scripts="no"/>
     <domains enable_anywhere="true"/>
     <choices-outline>
         $ROSETTA2OUTLINE
@@ -781,6 +875,8 @@ cat > "$DISTFILE" <<EOF
         <line choice="python"/>
         $BOOTSTRAPOUTLINE
         $CONFOUTLINE
+        $CLIENTCERTOUTLINE
+        $AUTORUNOUTLINE
     </choices-outline>
     $ROSETTA2CHOICE
     <choice id="core" title="$CORETITLE" description="$COREDESC">
@@ -803,15 +899,19 @@ cat > "$DISTFILE" <<EOF
     </choice>
     $BOOTSTRAPCHOICE
     $CONFCHOICE
+    $CLIENTCERTCHOICE
+    $AUTORUNCHOICE
     $ROSETTA2REF
     <pkg-ref id="$PKGID.core" auth="Root">${PKGPREFIX}munkitools_core.pkg</pkg-ref>
     <pkg-ref id="$PKGID.admin" auth="Root">${PKGPREFIX}munkitools_admin.pkg</pkg-ref>
     <pkg-ref id="$PKGID.app" auth="Root">${PKGPREFIX}munkitools_app.pkg</pkg-ref>
-    <pkg-ref id="$PKGID.launchd" auth="Root" $LAUNCHDPOSTINSTALLACTION>${PKGPREFIX}munkitools_launchd.pkg</pkg-ref>
+    <pkg-ref id="$PKGID.launchd" auth="Root" onConclusionScript="launchdRestartAction()">${PKGPREFIX}munkitools_launchd.pkg</pkg-ref>
     <pkg-ref id="$PKGID.app_usage" auth="Root">${PKGPREFIX}munkitools_app_usage.pkg</pkg-ref>
     <pkg-ref id="$PKGID.python" auth="Root">${PKGPREFIX}munkitools_python.pkg</pkg-ref>
     $BOOTSTRAPREF
     $CONFREF
+    $CLIENTCERTREF
+    $AUTORUNREF
     <product id="$PKGID" version="$VERSION" />
 </installer-script>
 EOF
@@ -847,6 +947,10 @@ if [ "$BOOTSTRAPPKG" == "YES" ] ; then
     sudo chown -hR root:admin "$BOOTSTRAPROOT"
 fi
 
+if [ "$AUTORUNPKG" == "YES" ] ; then
+    sudo chown -hR root:admin "$AUTORUNROOT"
+fi
+
 if [ "$CONFPKG" == "YES" ] ; then
     sudo chown -hR root:admin "$CONFROOT"
 fi
@@ -855,15 +959,25 @@ if [ "$ROSETTA2" == "YES" ] ; then
     sudo chown -hR root:admin "$ROSETTA2ROOT"
 fi
 
+if [ "$CLIENTCERTPKG" == "YES" ] ; then
+    sudo chown -hR root:admin "$CLIENTCERTROOT"
+fi
+
 ALLPKGS="core admin app launchd app_usage python"
 if [ "$BOOTSTRAPPKG" == "YES" ] ; then
     ALLPKGS="${ALLPKGS} bootstrap"
+fi
+if [ "$AUTORUNPKG" == "YES" ] ; then
+    ALLPKGS="${ALLPKGS} autorun"
 fi
 if [ "$CONFPKG" == "YES" ] ; then
     ALLPKGS="${ALLPKGS} config"
 fi
 if [ "$ROSETTA2" == "YES" ] ; then
     ALLPKGS="${ALLPKGS} rosetta2"
+fi
+if [ "$CLIENTCERTPKG" == "YES" ] ; then
+    ALLPKGS="${ALLPKGS} clientcert"
 fi
 
 ######################
@@ -879,9 +993,7 @@ for pkg in $ALLPKGS ; do
         "launchd")
             ver="$LAUNCHDVERSION"
             SCRIPTS=""
-            if [ "$MDMSTYLE" == "YES" ] ; then
-                SCRIPTS="${MUNKIROOT}/code/tools/pkgresources/Scripts_launchd"
-            fi
+            SCRIPTS="${MUNKIROOT}/code/tools/pkgresources/Scripts_launchd"
             ;;
         "app_usage")
             ver="$VERSION"
@@ -893,9 +1005,19 @@ for pkg in $ALLPKGS ; do
             ;;
         "bootstrap")
             ver="1.0"
+            SCRIPTS=""
+            ;;
+        "autorun")
+            ver="1.0"
+            SCRIPTS="${MUNKIROOT}/code/tools/pkgresources/Scripts_autorun"
             ;;
         "config")
             ver="1.0"
+            SCRIPTS=""
+            ;;
+        "clientcert")
+            ver="1.0"
+            SCRIPTS=""
             ;;
         "rosetta2")
             ver="1.0"
@@ -985,6 +1107,6 @@ fi
 echo "Distribution package created at $MPKG."
 echo
 echo "Removing temporary files..."
-sudo rm -rf "$PKGTMP"
+#sudo rm -rf "$PKGTMP"
 
 echo "Done."

@@ -1,7 +1,7 @@
 #!/usr/local/munki/munki-python
 # encoding: utf-8
 #
-# Copyright 2009-2021 Greg Neagle.
+# Copyright 2009-2022 Greg Neagle.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -127,6 +127,13 @@ def networkUp():
     return False
 
 
+def detectNetworkHardware():
+    """Trigger the detection of new network hardware,
+       like a USB-to-Ethernet adapter"""
+    cmd = ["/usr/sbin/networksetup", "-detectnewhardware"]
+    subprocess.call(cmd)
+
+
 def clearLastNotifiedDate():
     """Clear the last date the user was notified of updates."""
     prefs.set_pref('LastNotifiedDate', None)
@@ -218,15 +225,18 @@ def runScript(script, display_name, runtype):
         display.display_warning(unicode_or_str(err))
     return result
 
+
 def cleanup(runtype):
     """
-    If there are executables inside the cleanup directory, run them and remove them if successful
+    If there are executables inside the cleanup directory,
+    run them and remove them if successful
     """
-    cleanupdir = os.path.join(os.path.realpath(os.path.dirname(sys.argv[0])), 'cleanup')
+    cleanupdir = os.path.join(os.path.realpath(
+        os.path.dirname(sys.argv[0])), 'cleanup')
     if not os.path.isdir(cleanupdir):
         # path doesn't exist or isn't a directory
         return
-    
+
     # get only filenames (and not directory names) from cleanupdir
     (_, _, filenames) = next(os.walk(cleanupdir))
     for filename in filenames:
@@ -321,9 +331,9 @@ def doFinishingTasks(runtype=None):
     reports.savereport()
 
     # store the current pending update count and other data for munki-notifier
+    installinfo.save_pending_update_times()
     update_info = installinfo.get_pending_update_info()
     prefs.set_pref('PendingUpdateCount', update_info['PendingUpdateCount'])
-    installinfo.save_pending_update_times()
     prefs.set_pref('OldestUpdateDays', update_info['OldestUpdateDays'])
     prefs.set_pref('ForcedUpdateDueDate', update_info['ForcedUpdateDueDate'])
 
@@ -762,6 +772,7 @@ def main():
                     # we'll attempt to wait up to 60 seconds for the network
                     # interfaces to come up before continuing
                     display.display_status_minor('Waiting for network...')
+                    detectNetworkHardware()
                     for dummy_i in range(60):
                         if networkUp():
                             break
@@ -863,7 +874,7 @@ def main():
     munkilog.log("### Starting managedsoftwareupdate run: %s ###" % runtype)
     if options.verbose:
         print('Managed Software Update Tool')
-        print('Copyright 2010-2021 The Munki Project')
+        print('Copyright 2010-2022 The Munki Project')
         print('https://github.com/munki/munki\n')
 
     display.display_status_major('Starting...')

@@ -1,6 +1,6 @@
 # encoding: utf-8
 #
-# Copyright 2009-2021 Greg Neagle.
+# Copyright 2009-2022 Greg Neagle.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
 # you may not use this file except in compliance with the License.
@@ -50,6 +50,7 @@ from ..constants import POSTACTION_NONE, POSTACTION_RESTART, POSTACTION_SHUTDOWN
 
 from .. import display
 from .. import fetch
+from .. import info
 from .. import munkistatus
 from .. import munkihash
 from .. import munkilog
@@ -151,6 +152,11 @@ class AppleUpdates(object):
         msg = 'Checking for available Apple Software Updates...'
         display.display_status_major(msg)
 
+        if info.is_apple_silicon():
+            # don't actually download since this can trigger a prompt for
+            # credentials
+            return True
+
         os_version_tuple = osutils.getOsVersion(as_tuple=True)
         if os_version_tuple >= (10, 11):
             catalog_url = None
@@ -193,7 +199,12 @@ class AppleUpdates(object):
             # if the list is empty no need to run softwareupdate -l to filter
             # the list
             return []
-        su_results = su_tool.run(['-l', '--no-scan'])
+        if os_version_tuple < (11, 0):
+            # don't use --no-scan since that results in inaccurate results
+            su_results = su_tool.run(['-l'])
+        else:
+            # use --no-scan to avoid network usage and slow check
+            su_results = su_tool.run(['-l', '--no-scan'])
         filtered_updates = []
         # add update to filtered_updates only if it is also listed
         # in `softwareupdate -l` output
@@ -206,7 +217,8 @@ class AppleUpdates(object):
                 elif item.get('Title'):
                     # new-style info first seen in Catalina
                     if (item.get('Title') == update.get('Display Name') and
-                            item.get('Version') == update.get('Display Version')
+                            item.get('Version') == update.get('Display Version') and
+                            item.get('Deferred') != "YES"
                        ):
                         item.update(update)
                         filtered_updates.append(item)
@@ -218,19 +230,7 @@ class AppleUpdates(object):
         Returns:
           A list of string Apple update product ids.
         """
-        recommended_updates = self.get_filtered_recommendedupdates()
-        try:
-            return [item['Product Key'] for item in recommended_updates
-                    if 'Product Key' in item]
-        except IndexError:
-            # RecommendedUpdates is an empty list
-            pass
-        except (KeyError, AttributeError):
-            # RecommendedUpdates is in an unexpected format
-            display.display_debug1(
-                'com.apple.SoftwareUpdate RecommendedUpdates is in an '
-                'unexpected format: %s', recommended_updates)
-        return []
+        return [item['productKey'] for item in self.software_update_info()]
 
     def installed_apple_pkgs_changed(self):
         """Generates a SHA-256 checksum of the info for all packages in the
@@ -277,9 +277,14 @@ class AppleUpdates(object):
             munkilog.log('Installed Apple packages have changed.')
             return True
 
-        if not self.available_updates_downloaded():
-            munkilog.log('Downloaded updates do not match our list of '
-                         'available updates.')
+        os_version_tuple = osutils.getOsVersion(as_tuple=True)
+        # since OS updates in Big Sur don't get downloaded to
+        # /Library/Updates, this will trigger false positives
+        # So only check this on Catalina and lower
+        if os_version_tuple < (11, 0):
+            if not self.available_updates_downloaded():
+                munkilog.log('Downloaded updates do not match our list of '
+                             'available updates.')
             return True
 
         return False
@@ -486,7 +491,7 @@ class AppleUpdates(object):
         return self.apple_updates
 
     def write_appleupdates_file(self):
-        """Writes a file used by the MSU GUI to display available updates.
+        """Writes a file used by the MSC GUI to display available updates.
 
         Returns:
           Integer. Count of available Apple updates.
@@ -529,6 +534,7 @@ class AppleUpdates(object):
                 'Error reading: %s', self.apple_updates_plist)
             return
         apple_updates = pl_dict.get('AppleUpdates', [])
+        display.display_info('')
         if not apple_updates:
             display.display_info('No available Apple Software Updates.')
             return
@@ -536,6 +542,7 @@ class AppleUpdates(object):
         display.display_info(
             'The following Apple Software Updates are available to '
             'install:')
+        munki_installable_updates = self.installable_updates()
         for item in apple_updates:
             display.display_info(
                 '    + %s-%s' % (
@@ -547,10 +554,17 @@ class AppleUpdates(object):
             elif item.get('RestartAction') == 'RequireLogout':
                 display.display_info('       *Logout required')
                 reports.report['LogoutRequired'] = True
+            if item not in munki_installable_updates:
+                display.display_info('       *Must be manually installed')
 
     def installable_updates(self):
         """Returns a list of installable Apple updates.
-        This may filter out updates that require a restart."""
+        This may filter out updates that require a restart. On Apple silicon,
+        it returns an empty list since we can't use softwareupdate to install
+        at all."""
+        if info.is_apple_silicon():
+            # can't install any!
+            return []
         try:
             pl_dict = FoundationPlist.readPlist(self.apple_updates_plist)
         except FoundationPlist.FoundationPlistException:
@@ -578,6 +592,10 @@ class AppleUpdates(object):
           restart_action -- an integer indicating the action to take later:
                             none, logout, restart, shutdown
         """
+        if info.is_apple_silicon():
+            # can't install Apple softwareupdates on Apple Silicon
+            return POSTACTION_NONE
+
         # disable Stop button if we are presenting GUI status
         if display.munkistatusoutput:
             munkistatus.hideStopButton()

@@ -3,7 +3,7 @@
 //  Managed Software Center
 //
 //  Created by Greg Neagle on 6/7/18.
-//  Copyright © 2018-2021 The Munki Project. All rights reserved.
+//  Copyright © 2018-2022 The Munki Project. All rights reserved.
 //
 
 import Foundation
@@ -1277,6 +1277,14 @@ func appleUpdatesRequireRestartOnMojaveAndUp() -> Bool {
         }
     }
     return false
+}
+
+func appleUpdatesMustBeDoneWithSystemPreferences() -> Bool {
+    // Return true if any item in the apple update list must be done with System Preferences Software Update
+    if isAppleSilicon() {
+        return getAppleUpdates().count > 0
+    }
+    return appleUpdatesRequireRestartOnMojaveAndUp()
 }
 
 func updatesContainNonUserSelectedItems() -> Bool {
